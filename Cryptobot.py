@@ -13,10 +13,12 @@ from decimal import Decimal
 discord_bot_token = 'MzkxODE3NjczMzQxNzk2MzYz.DReO0g.qf_wKQ98aopzgcV5QikPm7mEd4o' #replace with your own private key
 crypto_ticker_channel_name = "crypto-ticker" #replace with your server's ticker channel name
 ticker_update_sec = 900 #seconds between ticker updates
-COMMAND_CHARACTER='!' #The command prefix that you want 
+COMMAND_CHARACTER='cb.' #The command prefix that you want 
 TICKER_CHARACTER='^' #the ticker prefix that you want
 API_PULL_LIMIT = 2000 #the number of API lines to get
 TICKER_DISPLAY_LIMIT = 45 #the number of API lines to display (first X by market cap)
+VERSION='0.1.0'
+RELEASE=True #affects the level of debug output
 
 ##------------------------------------- MAIN BOT CODE
 #housekeeping globals
@@ -24,8 +26,16 @@ crypto_ticker_channel = discord.Object(id='0') #placeholder channel
 api_list_all = [] #holds the string list for the ticker table (JSON get format)
 on_ready_done = False #global flag for on_ready init done
 
-#enable logging
-logging.basicConfig(level=logging.INFO)
+#enable logging, verbosity depends on if this is a release
+if(RELEASE): 
+	logging.basicConfig(level=logging.INFO)
+	#logging.getLogger("asyncio").setLevel(logging.CRITICAL+1)
+else: 
+	logging.basicConfig(level=logging.DEBUG)
+	logging.getLogger("discord").setLevel(logging.CRITICAL+1)
+	logging.getLogger("websockets").setLevel(logging.CRITICAL+1)
+	#root_logger.addFilter('root') 
+
 #get a discord client handle (connects to discord server)
 client = discord.Client()
 
@@ -35,36 +45,35 @@ async def on_ready():
 	global crypto_ticker_channel
 	global on_ready_done
 
-	print('\n-----on_ready-----')
-	print('Logged in as User',client.user.name, '(',client.user.id,')')
-	print('Connected server/channel list:')
+	logging.info('\n----------------------Startup')
+	logging.info('Logged in as User %s (%s)',client.user.name, client.user.id)
+	logging.info('Connected server/channel list:')
 
 	#print the list of connected servers and their channels (this is informational only)
 	server_count=0
 	for s in client.servers:
 		server_count+=1 #global server count
 		channel_count=0 #local count per server
-		print('\t[',server_count,']:',s.name,'(',s.id,')')
+		logging.info('\t[%s]: %s (%s)',server_count, s.name, s.id)
 		for c in s.channels:
 			channel_count+=1
-			print('\t\t[',channel_count,']:',c.name,'(',c.id,')')
+			logging.info('\t\t[%s]: %s (%s)',channel_count, c.name, c.id)
 
 	#find the first instance of a channel whose name matches the string crypto_ticker_channel_name
 	crypto_ticker_channel = discord.utils.find(lambda c: c.name==crypto_ticker_channel_name, s.channels)
 	if not crypto_ticker_channel is None: 
-		print('\tServer ticker channel found: ',crypto_ticker_channel.name,'(',crypto_ticker_channel.id,')')
+		logging.info('\tServer ticker channel found: %s (%s)',crypto_ticker_channel.name, crypto_ticker_channel.id)
 	else:
 		#if no match found, use the default channel on the first server in the server list 
 		for s in client.servers:
 			crypto_ticker_channel = s.default_channel
 			break
-		print('\tNo ticker channel found on any server, using default channel "',crypto_ticker_channel.name,'" on server "',crypto_ticker_channel.server.name,'"')
+		logging.info('\tNo ticker channel found on any server, using default channel "%s" on server "%s"',crypto_ticker_channel.name, crypto_ticker_channel.server.name)
 	#set global flag for init done
 	on_ready_done = True
 	#do an initial ticker update (the scheduled one won't run because on_ready_done wasn't set at t=0)
+	logging.info('\n----------------------End Startup')
 	await crypto_ticker_update()
-	print(on_ready_done)
-	print('------------')
 
 ##------------------------------------- EVENT: ON_MESSAGE(message)
 @client.event
@@ -77,11 +86,11 @@ async def on_message(message):
 
 	command=message_chunk[0]
 	#check incoming messages for valid commands
-	if(command[0]==COMMAND_CHARACTER):  #starts with valid command code
-		print("command parse: ", command)
-		if (command in on_message_handlers):
-			await on_message_handlers[command](message) #this actually runs the function from the dictionary, because Python is ridiculous
-		else: print("No handler found for command:", command) #no handler for the command
+	if(command[:len(COMMAND_CHARACTER)]==COMMAND_CHARACTER):  #starts with valid command code
+		logging.debug("command parse: %s | %s", command, command[:len(COMMAND_CHARACTER)])
+		if (command[len(COMMAND_CHARACTER):] in on_message_handlers):
+			await on_message_handlers[command[len(COMMAND_CHARACTER):]](message) #this actually runs the function from the dictionary, because Python is ridiculous
+		else: logging.debug("No handler found for command: %s | %s", command, command[len(COMMAND_CHARACTER):] )  #no handler for the command
 	else: #just a normal sentence, or coin references
 		for chunk in message_chunk: #iterate through every "word" (seperated by spaces) in the message
 			if(len(chunk)==0): continue #skip empty chunks - no one likes empty chunks
@@ -92,12 +101,27 @@ async def on_message(message):
 		else: return #normal message, nothing to do here
 
 ##------------------------------------- COMMAND HANDLERS FOR ON_MESSAGE EVENTS
-async def current_btc_price(message=""):
-	global crypto_ticker_channel
-	print('ticker_channel: ',crypto_ticker_channel.name)
-	#crypto_ticker_channel = discord.utils.find(lambda c: c.name==crypto_ticker_channel_name, message.server.channels)
-	ticker_message = "Current BTC Price: $"+ str(Bitfinex().get_current_price())
-	await client.send_message(crypto_ticker_channel, ticker_message)
+
+#Command help
+async def crypto_bot_help(message):
+	logging.debug('crypto_bot_help(%s)',message.content)
+	
+	display_string="CryptoBot "+VERSION+" command list:\n-------------------------------------\n"
+	display_string+=TICKER_CHARACTER+"XXX: get info for a coin whose ticker is XXX (e.g. ^BTC gets Bitcoin).  Multiple tickers may be used per message. Try it out!\n"
+
+	for cmd in on_message_handlers:
+		logging.debug("command: %s",cmd)
+		display_string+= COMMAND_CHARACTER+cmd+":\t"+on_message_helpstrings[cmd]+"\n"
+
+	await client.send_message(message.channel, "```"+display_string+"```")
+
+#Simple bot status check command
+async def crypto_bot_status(message):
+	logging.debug('crypto_bot_status(%s)',message.content)
+	
+	display_string = '```'+'CrytpoBot status is: GOOD'+'```'
+
+	await client.send_message(message.channel, display_string)
 
 # print out a mini-table in the channel where it was mentioned
 async def print_coin_references(message_channel,coin_ref,send_lines=15):
@@ -107,12 +131,13 @@ async def print_coin_references(message_channel,coin_ref,send_lines=15):
 	for coin_sym in coin_ref:
 		result = get_coin_ticker(coin_sym)
 		if(result!=None): coin_ticker_data.append(result)
-		else: print("Coin reference",coin_sym,"not found in JSON data") 
+		else: logging.debug("Coin reference %s not found in JSON data", coin_sym) 
 	#if no valid references were found, abort without sending any messages
 	if(len(coin_ticker_data)==0): return None
 
 	#use tabulate to convert into display friendly table format
-	print(coin_ticker_data)
+	logging.debug('coin_ticker_data: %s', coin_ticker_data)
+
 	coin_ticker_display = tabulate (
 		coin_ticker_data, 
 		headers=["**Currency**","**Symbol**","**Price(USD)**","**Change(1h)**","**Change(24h)**","**Change(7d)**"],
@@ -147,7 +172,7 @@ async def print_coin_references(message_channel,coin_ref,send_lines=15):
 		ticker_message=""
 
 def get_coin_ticker(coin_sym): #return the fields of interest for a single coin reference given by a string, coin_sym
-	print("get_coin_ticker("+coin_sym+")")
+	logging.debug("get_coin_ticker("+coin_sym+")")
 	for currency in api_list_all: #iterate through all the JSON data
 		if(currency['symbol']==coin_sym): #found a match
 			ticker_string = [ 
@@ -158,7 +183,7 @@ def get_coin_ticker(coin_sym): #return the fields of interest for a single coin 
 				'{0:+f}'.format(Decimal(currency['percent_change_24h']))+' %',
 				'{0:+f}'.format(Decimal(currency['percent_change_7d']))+' %' 
 				]
-			print("ticker_string=",ticker_string)
+			logging.debug('ticker_string=%s', ticker_string)
 			return ticker_string 
 	#we didn't find the ticker in the list
 	return None
@@ -167,10 +192,8 @@ async def print_full_ticker(send_lines=15,purge=True):
 	global api_list_all
 	api_list_all_display=[]
 
-	print("print_full_ticker()")
 	#load just the desired data in the display list
 	for currency in api_list_all[0:TICKER_DISPLAY_LIMIT-1+2]: #-1 for index, +2 so that we don't count the header
-		print(currency['symbol']) #debug
 		api_list_all_display.append(
 			[ 
 			currency['name'], 
@@ -189,12 +212,8 @@ async def print_full_ticker(send_lines=15,purge=True):
 		tablefmt="simple"
 		)
 
-	#print(display_string)
-
 	#Use split to chunk the table back out into individual strings (for send_message())
 	coin_ticker_buffered = display_string.split('\n')
-
-	#print(display_string_buffered)
 
 	#purge channel of last 100 CryptoBot messages if option is set
 	if(purge): await client.purge_from(crypto_ticker_channel, limit=100, check=lambda m:m.author==client.user)
@@ -223,17 +242,22 @@ def get_ticker_update():
 	global api_list_all
 	global api_list_all_chunked
 
-	print("get_ticker_update()")
+	logging.debug('get_ticker_update()')
 	#create new API into coinmarketcap.com
 	cmc_api = coinmarketcap.Market()
 
 	#load global variable api_list_all with JSON response
 	api_list_all = cmc_api.ticker("",limit=API_PULL_LIMIT,convert='USD') #contains the raw query data from coinmarketcap API
 
-	print(api_list_all)
+on_message_handlers = { "status" 	: crypto_bot_status,
+						"alive" 	: crypto_bot_status,
+						"help"		: crypto_bot_help,
+						"h"			: crypto_bot_help }
 
-on_message_handlers = { 
-						"!btc":			current_btc_price }
+on_message_helpstrings = {  "status" 	: "Displays CryptoBot current status",
+							"alive" 	: "Ping Cryptobot to see if it's still running",
+							"help"		: "Display this command list",
+							"h"			: "Display this command list" }
 
 ##------------------------------------- BACKGROUND TASKS (run periodically)
 async def crypto_ticker_update():
